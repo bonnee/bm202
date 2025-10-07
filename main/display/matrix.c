@@ -26,9 +26,6 @@
 #define IO_MOSI GPIO_NUM_1 // Dedicated SPI MOSI pin
 #define SPI_FREQ (2 * 1000 * 1000)
 
-#define ROW_NUM 7
-#define COL_NUM 95
-
 // GPIOs for each row. Please change these to match your hardware.
 static const gpio_num_t row_gpios[ROW_NUM] = {
     GPIO_NUM_0,
@@ -41,8 +38,6 @@ static const gpio_num_t row_gpios[ROW_NUM] = {
 };
 
 static spi_device_handle_t spi;
-
-gfx_handle_t *gfx_handle;
 
 static void gfx_update_callback(TimerHandle_t xTimer)
 {

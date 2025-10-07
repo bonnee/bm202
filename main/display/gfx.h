@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "matrix.h"
+
 // Forward declaration
 struct gfx_scrolling_text;
 
@@ -18,17 +20,18 @@ typedef struct
 // Font descriptor structure
 typedef struct
 {
-    uint8_t width;          // Width in pixels
-    uint8_t height;         // Height in pixels (7 for this font)
-    uint8_t spacing;        // Space between characters
-    uint8_t bytes_per_char; // Number of bytes per character (7 for this font, one byte per row)
-    uint8_t first_char;     // First ASCII character (usually 32/space)
-    uint8_t last_char;      // Last ASCII character
-    const uint8_t *data;    // Font bitmap data
+    uint8_t width;           // Width in pixels
+    uint8_t height;          // Height in pixels (7 for this font)
+    uint8_t spacing;         // Space between characters
+    uint8_t bytes_per_char;  // Number of bytes per character (7 for this font, one byte per row)
+    uint8_t first_char;      // First ASCII character (usually 32/space)
+    const uint8_t last_char; // Last ASCII character
+    const uint8_t *data;     // Font bitmap data
 } gfx_font_t;
 
 // Struct to hold state for a single scrolling text instance
-typedef struct gfx_scrolling_text {
+typedef struct gfx_scrolling_text
+{
     char *text;
     const gfx_font_t *font;
     int x;
@@ -38,6 +41,8 @@ typedef struct gfx_scrolling_text {
     int scroll_offset;
     struct gfx_scrolling_text *next;
 } gfx_scrolling_text_t;
+
+extern gfx_handle_t *gfx_handle;
 
 gfx_handle_t *gfx_init(uint16_t width, uint16_t height);
 void gfx_free(gfx_handle_t *handle);

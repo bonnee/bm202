@@ -3,6 +3,7 @@
 
 #include "gfx.h"
 
-extern gfx_handle_t *gfx_handle;
+#define ROW_NUM 7
+#define COL_NUM 95
 
 void matrix_task(void *param);

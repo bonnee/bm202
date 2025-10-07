@@ -133,7 +133,7 @@ static const uint8_t font5x7_data[] = {
     0b01110,     // ####.
 
     // ASCII 58-64 (punctuation)
-    CHARI(58) = {0}, // Replace [7 * 26] with proper CHARI indexing
+    CHARI(58) = {0},
 
     // Letters (ASCII 65-90)
     CHARI('A') =
