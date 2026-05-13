@@ -14,12 +14,17 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/timers.h>
+#include <freertos/semphr.h>
 #include <string.h>
 
 #include "font5x7.h"
 #include "gfx.h"
 
 #define TAG "MAT"
+
+// Layer display control
+static gfx_layer_t *active_layer = NULL;
+static SemaphoreHandle_t layer_mutex = NULL;
 
 #define IO_CLR GPIO_NUM_4
 #define IO_CLK GPIO_NUM_3
@@ -39,6 +44,32 @@ static const gpio_num_t row_gpios[ROW_NUM] = {
 
 static spi_device_handle_t spi;
 
+// ============================================================================
+// Layer Management
+// ============================================================================
+
+void matrix_set_active_layer(gfx_layer_t *layer) {
+    if (layer_mutex) {
+        xSemaphoreTake(layer_mutex, portMAX_DELAY);
+    }
+    active_layer = layer;
+    if (layer_mutex) {
+        xSemaphoreGive(layer_mutex);
+    }
+}
+
+gfx_layer_t *matrix_get_active_layer(void) {
+    gfx_layer_t *layer = NULL;
+    if (layer_mutex) {
+        xSemaphoreTake(layer_mutex, portMAX_DELAY);
+    }
+    layer = active_layer;
+    if (layer_mutex) {
+        xSemaphoreGive(layer_mutex);
+    }
+    return layer;
+}
+
 static void gfx_update_callback(TimerHandle_t xTimer)
 {
     if (gfx_handle)
@@ -49,6 +80,11 @@ static void gfx_update_callback(TimerHandle_t xTimer)
 
 static void init()
 {
+    // Create layer mutex for thread-safe layer switching
+    if (!layer_mutex) {
+        layer_mutex = xSemaphoreCreateMutex();
+    }
+
     // Configure SPI
     spi_bus_config_t buscfg = {
         .miso_io_num = -1,
@@ -109,29 +145,51 @@ static void init()
     }
 }
 
+void matrix_init(void) {
+    // Initialize but don't run the task yet
+    // This allows setting up layers before matrix_task starts
+    if (!layer_mutex) {
+        layer_mutex = xSemaphoreCreateMutex();
+    }
+}
+
 void matrix_task(void *params)
 {
     init();
 
     spi_device_acquire_bus(spi, portMAX_DELAY);
 
-    // Calculate row pointers based on bytes per row
-    uint16_t bytes_per_row = (COL_NUM + 7) / 8;
-    uint8_t *buf_row_ptr[ROW_NUM];
-    for (int i = 0; i < ROW_NUM; i++)
-    {
-        buf_row_ptr[i] = gfx_handle->fb + (i * bytes_per_row);
-    }
-
     uint8_t row = 0;
     for (;;)
     {
-        spi_transaction_t trans =
-            {
-                .tx_buffer = buf_row_ptr[row],
+        // Get current active layer or fallback to gfx_handle
+        gfx_layer_t *layer = NULL;
+        if (layer_mutex) {
+            xSemaphoreTake(layer_mutex, pdMS_TO_TICKS(1));
+        }
+        layer = active_layer;
+        if (layer_mutex) {
+            xSemaphoreGive(layer_mutex);
+        }
+
+        uint8_t *row_data = NULL;
+        uint16_t bytes_per_row = (COL_NUM + 7) / 8;
+
+        // Prefer active layer; fallback to legacy gfx_handle
+        if (layer && layer->fb) {
+            row_data = layer->fb + (row * bytes_per_row);
+        } else if (gfx_handle && gfx_handle->fb) {
+            row_data = gfx_handle->fb + (row * bytes_per_row);
+        }
+
+        if (row_data) {
+            spi_transaction_t trans = {
+                .tx_buffer = row_data,
                 .length = COL_NUM + 1,
             };
-        ESP_ERROR_CHECK_WITHOUT_ABORT(spi_device_polling_transmit(spi, &trans));
+            ESP_ERROR_CHECK_WITHOUT_ABORT(spi_device_polling_transmit(spi, &trans));
+        }
+
         gpio_set_level(row_gpios[row], pdTRUE);
         vTaskDelay(pdMS_TO_TICKS(1));
         gpio_set_level(row_gpios[row], pdFALSE);

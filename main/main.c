@@ -21,8 +21,10 @@
 #include "display/gfx.h"
 #include "display/matrix.h"
 
+#include "carousel.h"
 #include "datetime.h"
 #include "vlt.h"
+#include "weather/weather.h"
 
 #define TAG "MAIN"
 #define WIFI_SSID "eagleTRT"
@@ -69,6 +71,8 @@ void app_main(void)
 
     initialize_wifi();
     xTaskCreate(matrix_task, "matrix", 16384, NULL, 20, NULL);
+    xTaskCreate(carousel_task, "carousel", 4096, (void *)CAROUSEL_DEFAULT_INTERVAL_MS, 4, NULL);
     xTaskCreate(datetime_task, "time_sync", 4096, NULL, 2, NULL);
     xTaskCreate(vlt_task, "vlt", 4096, (void *)68, 5, NULL);
+    xTaskCreate(weather_task, "weather", 8192, NULL, 3, NULL);
 }

@@ -1,6 +1,6 @@
 {
   "idf.flashType": "UART",
-  "idf.port": "/dev/ttyACM1",
+  "idf.port": "/dev/ttyACM0",
   "idf.openOcdConfigs": [
     "board/esp32c3-builtin.cfg"
   ],
@@ -14,5 +14,6 @@
     "stdlib.h": "c",
     "gfx.h": "c",
     "matrix.h": "c"
-  }
+  },
+  "idf.currentSetup": "/opt/esp/idf"
 }

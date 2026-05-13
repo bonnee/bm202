@@ -3,6 +3,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <freertos/FreeRTOS.h>
 
 #include "matrix.h"
 
@@ -43,6 +44,17 @@ typedef struct gfx_scrolling_text
 } gfx_scrolling_text_t;
 
 extern gfx_handle_t *gfx_handle;
+
+/**
+ * @brief Set the render queue for gfx to use (callback-based rendering)
+ * 
+ * Must be called during initialization before any drawing operations.
+ * If not called, gfx falls back to legacy direct framebuffer drawing.
+ * 
+ * @param queue    Render queue handle
+ * @param layer_id Target layer ID (0xFF for broadcast to all)
+ */
+void gfx_set_render_queue(QueueHandle_t queue, uint8_t layer_id);
 
 gfx_handle_t *gfx_init(uint16_t width, uint16_t height);
 void gfx_free(gfx_handle_t *handle);

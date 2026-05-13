@@ -4,14 +4,14 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "carousel.h"
+#include "display/compositor.h"
 #include "display/font_slot.h"
 #include "display/gfx.h"
 
 #define SLOT_DIGITS 3
-#define MIN_SPIN_TIME 500
-#define MAX_SPIN_TIME 2000
-#define REVEAL_DELAY 300  // ms between each digit reveal
-#define REPEAT_DELAY 4000 // ms before starting new animation
+#define VLT_FIRST_STOP_MS 900
+#define VLT_STOP_STAGGER_MS 350
 
 typedef struct
 {
@@ -23,51 +23,45 @@ typedef struct
 static const size_t vlt_sym_count = 6;
 static digit_state_t digit_states[SLOT_DIGITS];
 
-static void init_slot_spin(void)
+static void init_slot_spin(uint32_t start_ms)
 {
     for (int i = 0; i < SLOT_DIGITS; i++)
     {
         digit_states[i].spinning = true;
         digit_states[i].final_value = rand() % (vlt_sym_count);
-        // Stagger the stop times
-        digit_states[i].stop_time = pdTICKS_TO_MS(xTaskGetTickCount()) +
-                                    MIN_SPIN_TIME +
-                                    (rand() % (MAX_SPIN_TIME - MIN_SPIN_TIME)) +
-                                    (i * REVEAL_DELAY);
+        digit_states[i].stop_time = start_ms + VLT_FIRST_STOP_MS + (i * VLT_STOP_STAGGER_MS);
     }
+}
+
+static int vlt_aligned_x(void)
+{
+    // Place VLT (carousel) in the left region
+    return LEFT_REGION_X + 5 * 4;
 }
 
 static void draw_vlt_text(int col, int row)
 {
-    uint8_t buf[SLOT_DIGITS + 1];
+    char buf[SLOT_DIGITS + 1];
     buf[SLOT_DIGITS] = '\0';
     uint32_t current_time = pdTICKS_TO_MS(xTaskGetTickCount());
 
     for (int i = 0; i < SLOT_DIGITS; i++)
     {
-        if (i > 0)
-        {
-            // strncat(buf, " ", sizeof(buf) - strlen(buf) - 1);
-        }
-
         if (digit_states[i].spinning && current_time < digit_states[i].stop_time)
         {
-            // Show random symbol while spinning
+            // Show random symbol while spinning (map to font_slot range)
             const uint8_t s = rand() % (vlt_sym_count);
-            // strncat(buf, s, sizeof(buf) - strlen(buf) - 1);
-            buf[i] = s; // s;
+            buf[i] = (char)(font_slot.first_char + (s % (font_slot.last_char - font_slot.first_char + 1)));
         }
         else
         {
-            // Show final value when stopped
+            // Show final value when stopped (map to font_slot range)
             digit_states[i].spinning = false;
-            buf[i] = digit_states[i].final_value;
-            // strncat(buf, digit_states[i].final_value,
-            //        sizeof(buf) - strlen(buf) - 1);
+            buf[i] = (char)(font_slot.first_char + (digit_states[i].final_value % (font_slot.last_char - font_slot.first_char + 1)));
         }
     }
 
-    gfx_draw_text(gfx_handle, &font_slot, col, row, (char *)buf, COL_NUM - col);
+    gfx_draw_text(gfx_handle, &font_slot, col, row, (char *)buf, LEFT_REGION_WIDTH);
 }
 
 static bool all_digits_stopped(void)
@@ -85,21 +79,26 @@ static bool all_digits_stopped(void)
 // Task che anima il testo stile slot
 void vlt_task(void *x)
 {
-    uint32_t last_spin_time = 0;
+    (void)x;
+    uint32_t last_generation_seen = UINT32_MAX;
+    uint32_t current_time;
+    int x_pos = vlt_aligned_x();
 
     for (;;)
     {
-        uint32_t current_time = pdTICKS_TO_MS(xTaskGetTickCount());
-
-        // Start new spin after delay
-        if (all_digits_stopped() &&
-            (current_time - last_spin_time) > REPEAT_DELAY)
+        if (carousel_get_item() == CAROUSEL_ITEM_VLT)
         {
-            init_slot_spin();
-            last_spin_time = current_time;
-        }
+            uint32_t generation = carousel_get_generation();
+            if (generation != last_generation_seen)
+            {
+                current_time = pdTICKS_TO_MS(xTaskGetTickCount());
+                init_slot_spin(current_time);
+                last_generation_seen = generation;
+            }
 
-        draw_vlt_text((uint32_t)x, 0);
+            compositor_clear_left_region();
+            draw_vlt_text(x_pos, 0);
+        }
         vTaskDelay(pdMS_TO_TICKS(50)); // Update display frequently
     }
 }

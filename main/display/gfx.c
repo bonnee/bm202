@@ -1,10 +1,29 @@
 #include "gfx.h"
+#include "font5x7.h"
+#include "font_slot.h"
+#include "render_queue.h"
 #include <esp_log.h>
 #include <stdlib.h>
 #include <string.h>
 
-// Forward declaration for static helper
-static void _gfx_draw_text_internal(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, const char *text, int clip_x, int clip_width);
+static void _gfx_draw_text_internal(gfx_handle_t *handle, const gfx_font_t *font,
+                                    int x, int y, const char *text,
+                                    int clip_x, int clip_width);
+
+// Global render queue handle (set during initialization)
+static QueueHandle_t g_render_queue = NULL;
+static uint8_t g_active_layer_id = 0xFF; // 0xFF = broadcast to all layers
+
+/**
+ * @brief Set the render queue for gfx to use
+ *
+ * Must be called once during initialization before any drawing operations.
+ */
+void gfx_set_render_queue(QueueHandle_t queue, uint8_t layer_id)
+{
+    g_render_queue = queue;
+    g_active_layer_id = layer_id;
+}
 
 gfx_handle_t *gfx_init(uint16_t width, uint16_t height)
 {
@@ -49,25 +68,44 @@ void gfx_free(gfx_handle_t *handle)
     free(handle);
 }
 
+/**
+ * @brief Enqueue a pixel drawing request
+ */
 void gfx_draw_pixel(gfx_handle_t *handle, int x, int y, bool state)
 {
-    // Bounds checking
-    if (x < 0 || x >= handle->width || y < 0 || y >= handle->height)
+    // Support legacy direct drawing to framebuffer if no queue is set
+    if (!g_render_queue)
+    {
+        // Bounds checking
+        if (x < 0 || x >= handle->width || y < 0 || y >= handle->height)
+            return;
+
+        // Invert x coordinate to compensate for shift register chain
+        x = handle->width - 1 - x;
+
+        // Calculate position in framebuffer
+        uint16_t bytes_per_row = (handle->width + 7) / 8;
+        uint16_t byte_offset = (y * bytes_per_row) + (x >> 3);
+        uint8_t bit_mask = 1 << (7 - (x & 0x07));
+
+        // Set or clear the bit
+        if (state)
+            handle->fb[byte_offset] |= bit_mask;
+        else
+            handle->fb[byte_offset] &= ~bit_mask;
         return;
+    }
 
-    // Invert x coordinate to compensate for shift register chain
-    x = handle->width - 1 - x;
+    // Enqueue render request
+    gfx_render_request_t request = {
+        .type = GFX_REQ_PIXEL,
+        .layer_id = g_active_layer_id,
+        .payload.pixel = {
+            .x = x,
+            .y = y,
+            .state = state ? 1 : 0}};
 
-    // Calculate position in framebuffer
-    uint16_t bytes_per_row = (handle->width + 7) / 8;
-    uint16_t byte_offset = (y * bytes_per_row) + (x >> 3);
-    uint8_t bit_mask = 1 << (7 - (x & 0x07)); // Invert bit position within byte
-
-    // Set or clear the bit
-    if (state)
-        handle->fb[byte_offset] |= bit_mask;
-    else
-        handle->fb[byte_offset] &= ~bit_mask;
+    render_queue_send(g_render_queue, &request, pdMS_TO_TICKS(1));
 }
 
 void gfx_draw_text(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, const char *text, int text_width)
@@ -106,8 +144,35 @@ void gfx_draw_text(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, c
     }
     else
     {
-        // Draw text statically without clipping
-        _gfx_draw_text_internal(handle, font, x, y, text, 0, 0);
+        // Draw text statically - enqueue if queue available
+        if (g_render_queue)
+        {
+            // Convert font pointer to font_type_t
+            font_type_t font_type = FONT_5X7;
+            if (font == &font_slot)
+            {
+                font_type = FONT_SLOT;
+            }
+
+            gfx_render_request_t request = {
+                .type = GFX_REQ_TEXT,
+                .layer_id = g_active_layer_id,
+                .payload.text = {
+                    .x = x,
+                    .y = y,
+                    .text_width = 0, // Static
+                    .font_type = font_type,
+                }};
+            strncpy(request.payload.text.text, text, sizeof(request.payload.text.text) - 1);
+            request.payload.text.text[sizeof(request.payload.text.text) - 1] = '\0';
+
+            render_queue_send(g_render_queue, &request, pdMS_TO_TICKS(1));
+        }
+        else
+        {
+            // Legacy: draw directly to framebuffer when queue is not configured.
+            _gfx_draw_text_internal(handle, font, x, y, text, 0, 0);
+        }
     }
 }
 
@@ -116,12 +181,23 @@ void gfx_update(gfx_handle_t *handle)
     gfx_scrolling_text_t *current = handle->scrolling_texts;
     while (current)
     {
-        // 1. Clear the area where the scrolling text will be drawn
-        for (int row = 0; row < 7; row++) // Assuming font height is 7
+        // 1. Clear the area where the scrolling text will be drawn.
+        if (g_render_queue)
         {
-            for (int col = 0; col < current->text_width; col++)
+            gfx_render_request_t clear_req = {
+                .type = GFX_REQ_CLEAR,
+                .layer_id = g_active_layer_id,
+            };
+            render_queue_send(g_render_queue, &clear_req, pdMS_TO_TICKS(1));
+        }
+        else
+        {
+            for (int row = 0; row < 7; row++)
             {
-                gfx_draw_pixel(handle, current->x + col, current->y + row, false);
+                for (int col = 0; col < current->text_width; col++)
+                {
+                    gfx_draw_pixel(handle, current->x + col, current->y + row, false);
+                }
             }
         }
 
@@ -133,25 +209,53 @@ void gfx_update(gfx_handle_t *handle)
             current->scroll_offset = -current->text_width;
         }
 
-        // 3. Draw the text at its new scrolled position, clipped within its box
-        _gfx_draw_text_internal(handle, current->font, current->x - current->scroll_offset, current->y, current->text, current->x, current->text_width);
+        // 3. Draw the text at its new scrolled position.
+        if (g_render_queue)
+        {
+            // Convert font pointer to font_type_t
+            font_type_t font_type = FONT_5X7;
+            if (current->font == &font_slot)
+            {
+                font_type = FONT_SLOT;
+            }
+
+            gfx_render_request_t request = {
+                .type = GFX_REQ_TEXT,
+                .layer_id = g_active_layer_id,
+                .payload.text = {
+                    .x = current->x - current->scroll_offset,
+                    .y = current->y,
+                    .text_width = current->text_width, // Scrolling
+                    .font_type = font_type,
+                }};
+            strncpy(request.payload.text.text, current->text, sizeof(request.payload.text.text) - 1);
+            request.payload.text.text[sizeof(request.payload.text.text) - 1] = '\0';
+
+            render_queue_send(g_render_queue, &request, pdMS_TO_TICKS(1));
+        }
+        else
+        {
+            _gfx_draw_text_internal(handle,
+                                    current->font,
+                                    current->x - current->scroll_offset,
+                                    current->y,
+                                    current->text,
+                                    current->x,
+                                    current->text_width);
+        }
 
         current = current->next;
     }
 }
 
-/**
- * @brief Internal helper to draw text with optional clipping.
- * @param clip_x The x-coordinate of the clipping rectangle.
- * @param clip_width The width of the clipping rectangle. If 0, no clipping is performed.
- */
-static void _gfx_draw_text_internal(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, const char *text, int clip_x, int clip_width)
+static void _gfx_draw_text_internal(gfx_handle_t *handle, const gfx_font_t *font,
+                                    int x, int y, const char *text,
+                                    int clip_x, int clip_width)
 {
     int cursor_x = x;
 
     while (*text)
     {
-        // Validate and get character data
         if (*text < font->first_char || *text > font->last_char)
         {
             text++;
@@ -159,15 +263,11 @@ static void _gfx_draw_text_internal(gfx_handle_t *handle, const gfx_font_t *font
         }
         const uint8_t *char_data = &font->data[font->bytes_per_char * (*text - font->first_char)];
 
-        // Draw each row of the character
-        for (int row = 0; row < 7; row++) // font->height;
+        for (int row = 0; row < 7; row++)
         {
-            uint8_t row_data = char_data[row]; // Each byte is one row
-
-            // Draw each bit in this row from MSB to LSB
+            uint8_t row_data = char_data[row];
             for (int col = 0; col < font->width; col++)
             {
-                // Check if pixel is inside clipping rectangle before drawing
                 if (clip_width == 0 || (cursor_x + col >= clip_x && cursor_x + col < clip_x + clip_width))
                 {
                     bool pixel = row_data & ((1 << (font->width - 1)) >> col);
