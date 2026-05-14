@@ -17,12 +17,15 @@
 #include "display/sprite.h"
 #include "weather/icons.h"
 
+#include "location.h"
+
 static const char *TAG = "WEATHER";
 
 // Defaults near Milan, can be externalized later.
-#define WEATHER_LAT 45.06648924991558f
-#define WEATHER_LON 7.638754491635703f
+#define WEATHER_LAT LAT
+#define WEATHER_LON LON
 #define WEATHER_REFRESH_MS (10 * 60 * 1000)
+#define WEATHER_RETRY_MS (30 * 1000)
 #define WEATHER_ANIMATION_FRAME_MS 500
 
 typedef struct
@@ -55,6 +58,11 @@ static bool is_night_now(void)
     localtime_r(&now, &timeinfo);
 
     return (timeinfo.tm_hour < 6) || (timeinfo.tm_hour >= 18);
+}
+
+bool weather_has_data(void)
+{
+    return s_weather.valid != 0;
 }
 
 // ============================================================================
@@ -145,7 +153,7 @@ static uint16_t weather_group_width(int text_width_px)
 }
 
 // Fetch from Open-Meteo API over HTTP.
-static void fetch_weather_stub(void)
+static bool fetch_weather_stub(void)
 {
     char url[256];
     snprintf(url,
@@ -166,7 +174,7 @@ static void fetch_weather_stub(void)
     if (!client)
     {
         ESP_LOGW(TAG, "Failed to init HTTP client");
-        return;
+        return false;
     }
 
     ESP_LOGD(TAG, "Opening HTTP connection");
@@ -177,7 +185,7 @@ static void fetch_weather_stub(void)
     {
         ESP_LOGW(TAG, "HTTP open failed: %s", esp_err_to_name(err));
         esp_http_client_cleanup(client);
-        return;
+        return false;
     }
 
     // Read response status from headers
@@ -190,7 +198,7 @@ static void fetch_weather_stub(void)
         ESP_LOGW(TAG, "Invalid response: status=%d", status);
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
-        return;
+        return false;
     }
 
     char buf[4096] = {0};
@@ -202,7 +210,7 @@ static void fetch_weather_stub(void)
     if (total_read <= 0)
     {
         ESP_LOGW(TAG, "Failed to read response body, total_read=%d", total_read);
-        return;
+        return false;
     }
 
     buf[total_read] = '\0';
@@ -212,7 +220,7 @@ static void fetch_weather_stub(void)
     if (!root)
     {
         ESP_LOGW(TAG, "Failed to parse JSON response");
-        return;
+        return false;
     }
 
     cJSON *current = cJSON_GetObjectItemCaseSensitive(root, "current");
@@ -233,6 +241,8 @@ static void fetch_weather_stub(void)
         s_weather.weather_code = code->valueint;
         s_weather.valid = 1;
         ESP_LOGI(TAG, "Weather updated: %d°C (%d..%d) code=%d", s_weather.temp_c, s_weather.temp_min_c, s_weather.temp_max_c, s_weather.weather_code);
+        cJSON_Delete(root);
+        return true;
     }
     else
     {
@@ -240,24 +250,35 @@ static void fetch_weather_stub(void)
     }
 
     cJSON_Delete(root);
+    return false;
 }
 
 void weather_task(void *params)
 {
     (void)params;
-    TickType_t last_fetch = 0;
+    TickType_t last_fetch;
+    TickType_t fetch_interval = pdMS_TO_TICKS(WEATHER_RETRY_MS);
     char temp_text[12];
 
     // vTaskDelay(pdMS_TO_TICKS(5000)); // Stagger startup a bit to avoid contention
 
     ESP_LOGI(TAG, "started");
+    last_fetch = xTaskGetTickCount() - fetch_interval;
+
     for (;;)
     {
         TickType_t now = xTaskGetTickCount();
-        // Try to fetch weather every WEATHER_REFRESH_MS (10 min), or on startup if not valid
-        if ((now - last_fetch) >= pdMS_TO_TICKS(WEATHER_REFRESH_MS) || !s_weather.valid)
+
+        if ((now - last_fetch) >= fetch_interval)
         {
-            fetch_weather_stub();
+            if (fetch_weather_stub())
+            {
+                fetch_interval = pdMS_TO_TICKS(WEATHER_REFRESH_MS);
+            }
+            else
+            {
+                fetch_interval = pdMS_TO_TICKS(WEATHER_RETRY_MS);
+            }
             last_fetch = now;
         }
 

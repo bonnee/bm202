@@ -18,12 +18,14 @@
 #include "display/font5x7.h"
 #include "display/gfx.h"
 
+#include "location.h"
+
 static const char *TAG = "AIRPLANES";
 
-#define AIRPLANES_LAT 45.06648924991558
-#define AIRPLANES_LON 7.638754491635703
-#define AIRPLANES_REFRESH_MS (60 * 1000)
-#define AIRPLANES_CLOSEST_RADIUS_NM 100
+#define AIRPLANES_LAT LAT
+#define AIRPLANES_LON LON
+#define AIRPLANES_REFRESH_MS (20 * 1000)
+#define AIRPLANES_CLOSEST_RADIUS_NM 10
 
 typedef struct
 {
@@ -40,6 +42,11 @@ typedef struct
 } airplane_data_t;
 
 static airplane_data_t s_airplane = {0};
+
+bool airplanes_has_nearby(void)
+{
+    return s_airplane.valid != 0;
+}
 
 typedef struct
 {
@@ -204,7 +211,7 @@ static bool http_get_json(const char *url, char *buf, size_t buf_size)
     esp_http_client_config_t config = {
         .url = url,
         .method = HTTP_METHOD_GET,
-        .timeout_ms = 4000,
+        .timeout_ms = 8000,
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
     esp_http_client_handle_t client;
@@ -275,7 +282,7 @@ static bool http_get_json_logged(const char *url, char *buf, size_t buf_size, in
         esp_http_client_config_t config = {
             .url = current_url,
             .method = HTTP_METHOD_GET,
-            .timeout_ms = 6000,
+            .timeout_ms = 8000,
             .crt_bundle_attach = esp_crt_bundle_attach,
             .disable_auto_redirect = true,
             .max_redirection_count = 0,
@@ -635,12 +642,14 @@ static void fetch_airplanes(void)
     if (!http_get_json(url, response, sizeof(response)))
     {
         ESP_LOGW(TAG, "Failed to fetch closest aircraft");
+        s_airplane.valid = 0;
         return;
     }
 
     if (!parse_closest_aircraft(response, &tmp))
     {
         ESP_LOGW(TAG, "No valid aircraft in closest response");
+        s_airplane.valid = 0;
         return;
     }
 
@@ -691,7 +700,7 @@ static void format_airplane_text(const airplane_data_t *airplane, char *out, siz
 
 void airplanes_task(void *params)
 {
-    TickType_t last_fetch = 0;
+    TickType_t last_fetch;
     bool was_active = false;
     char display_text[96];
     char rendered_text[96] = {0};
@@ -699,12 +708,13 @@ void airplanes_task(void *params)
     (void)params;
 
     ESP_LOGI(TAG, "started");
+    last_fetch = xTaskGetTickCount() - pdMS_TO_TICKS(AIRPLANES_REFRESH_MS);
 
     for (;;)
     {
         TickType_t now = xTaskGetTickCount();
 
-        if ((now - last_fetch) >= pdMS_TO_TICKS(AIRPLANES_REFRESH_MS) || !s_airplane.valid)
+        if ((now - last_fetch) >= pdMS_TO_TICKS(AIRPLANES_REFRESH_MS))
         {
             fetch_airplanes();
             last_fetch = now;
@@ -734,6 +744,6 @@ void airplanes_task(void *params)
             rendered_text[0] = '\0';
         }
 
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
