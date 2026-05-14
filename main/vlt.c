@@ -77,9 +77,8 @@ static bool all_digits_stopped(void)
 }
 
 // Task che anima il testo stile slot
-void vlt_task(void *x)
+void vlt_task(void *param)
 {
-    (void)x;
     uint32_t last_generation_seen = UINT32_MAX;
     uint32_t current_time;
     int x_pos = vlt_aligned_x();

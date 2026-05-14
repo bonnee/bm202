@@ -9,6 +9,8 @@
 static void _gfx_draw_text_internal(gfx_handle_t *handle, const gfx_font_t *font,
                                     int x, int y, const char *text,
                                     int clip_x, int clip_width);
+static void _gfx_remove_scrolling_text(gfx_handle_t *handle, int x, int y, int text_width,
+                                       const gfx_font_t *font, const char *text);
 
 // Global render queue handle (set during initialization)
 static QueueHandle_t g_render_queue = NULL;
@@ -117,8 +119,10 @@ void gfx_draw_text(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, c
     // A text_width of 0 means static drawing.
     if (text_width > 0 && full_text_width > text_width)
     {
-        // For simplicity, this implementation adds a new scrolling text instance each time.
-        // A more robust implementation might check for and update existing instances.
+        // Update an existing scrolling entry for the same draw region when possible.
+        // This prevents duplicate scroll instances from accumulating across refreshes.
+        _gfx_remove_scrolling_text(handle, x, y, text_width, font, NULL);
+
         gfx_scrolling_text_t *scroll = malloc(sizeof(gfx_scrolling_text_t));
         if (!scroll)
             return;
@@ -173,6 +177,57 @@ void gfx_draw_text(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, c
             // Legacy: draw directly to framebuffer when queue is not configured.
             _gfx_draw_text_internal(handle, font, x, y, text, 0, 0);
         }
+    }
+}
+
+void gfx_remove_scrolling_text(gfx_handle_t *handle, int x, int y, int text_width)
+{
+    _gfx_remove_scrolling_text(handle, x, y, text_width, NULL, NULL);
+}
+
+static void _gfx_remove_scrolling_text(gfx_handle_t *handle, int x, int y, int text_width,
+                                       const gfx_font_t *font, const char *text)
+{
+    gfx_scrolling_text_t *prev = NULL;
+    gfx_scrolling_text_t *current;
+
+    if (!handle)
+    {
+        return;
+    }
+
+    current = handle->scrolling_texts;
+    while (current)
+    {
+        bool match = current->x == x && current->y == y && current->text_width == text_width;
+        if (match && font)
+        {
+            match = current->font == font;
+        }
+        if (match && text)
+        {
+            match = strcmp(current->text, text) == 0;
+        }
+
+        if (match)
+        {
+            gfx_scrolling_text_t *next = current->next;
+            if (prev)
+            {
+                prev->next = next;
+            }
+            else
+            {
+                handle->scrolling_texts = next;
+            }
+            free(current->text);
+            free(current);
+            current = next;
+            continue;
+        }
+
+        prev = current;
+        current = current->next;
     }
 }
 

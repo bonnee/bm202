@@ -9,6 +9,7 @@ typedef enum
     CAROUSEL_ITEM_DATE = 0,
     CAROUSEL_ITEM_VLT,
     CAROUSEL_ITEM_WEATHER,
+    CAROUSEL_ITEM_AIRPLANES,
     CAROUSEL_ITEM_COUNT,
 } carousel_item_t;
 

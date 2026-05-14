@@ -61,4 +61,5 @@ void gfx_free(gfx_handle_t *handle);
 void gfx_draw_pixel(gfx_handle_t *handle, int x, int y, bool state);
 void gfx_draw_line(gfx_handle_t *handle, int x0, int y0, int x1, int y1, bool state);
 void gfx_draw_text(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, const char *text, int text_width);
+void gfx_remove_scrolling_text(gfx_handle_t *handle, int x, int y, int text_width);
 void gfx_update(gfx_handle_t *handle);

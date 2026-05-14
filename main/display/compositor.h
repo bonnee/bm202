@@ -13,7 +13,7 @@
 // #endif
 
 #ifndef ICON_TEXT_GAP
-#define ICON_TEXT_GAP 1
+#define ICON_TEXT_GAP 2
 #endif
 
 void compositor_clear_right_region(void);

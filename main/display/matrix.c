@@ -12,9 +12,9 @@
 #include <esp_log.h>
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <freertos/timers.h>
-#include <freertos/semphr.h>
 #include <string.h>
 
 #include "font5x7.h"
@@ -48,23 +48,29 @@ static spi_device_handle_t spi;
 // Layer Management
 // ============================================================================
 
-void matrix_set_active_layer(gfx_layer_t *layer) {
-    if (layer_mutex) {
+void matrix_set_active_layer(gfx_layer_t *layer)
+{
+    if (layer_mutex)
+    {
         xSemaphoreTake(layer_mutex, portMAX_DELAY);
     }
     active_layer = layer;
-    if (layer_mutex) {
+    if (layer_mutex)
+    {
         xSemaphoreGive(layer_mutex);
     }
 }
 
-gfx_layer_t *matrix_get_active_layer(void) {
+gfx_layer_t *matrix_get_active_layer(void)
+{
     gfx_layer_t *layer = NULL;
-    if (layer_mutex) {
+    if (layer_mutex)
+    {
         xSemaphoreTake(layer_mutex, portMAX_DELAY);
     }
     layer = active_layer;
-    if (layer_mutex) {
+    if (layer_mutex)
+    {
         xSemaphoreGive(layer_mutex);
     }
     return layer;
@@ -81,7 +87,8 @@ static void gfx_update_callback(TimerHandle_t xTimer)
 static void init()
 {
     // Create layer mutex for thread-safe layer switching
-    if (!layer_mutex) {
+    if (!layer_mutex)
+    {
         layer_mutex = xSemaphoreCreateMutex();
     }
 
@@ -133,7 +140,7 @@ static void init()
     // Create and start a timer for gfx_update
     TimerHandle_t gfx_update_timer = xTimerCreate(
         "gfx_update_timer", // Timer name
-        pdMS_TO_TICKS(50),  // 50ms period
+        pdMS_TO_TICKS(26),  // refresh period
         pdTRUE,             // Auto-reload
         (void *)0,          // Timer ID
         gfx_update_callback // Callback function
@@ -145,10 +152,12 @@ static void init()
     }
 }
 
-void matrix_init(void) {
+void matrix_init(void)
+{
     // Initialize but don't run the task yet
     // This allows setting up layers before matrix_task starts
-    if (!layer_mutex) {
+    if (!layer_mutex)
+    {
         layer_mutex = xSemaphoreCreateMutex();
     }
 }
@@ -164,11 +173,13 @@ void matrix_task(void *params)
     {
         // Get current active layer or fallback to gfx_handle
         gfx_layer_t *layer = NULL;
-        if (layer_mutex) {
+        if (layer_mutex)
+        {
             xSemaphoreTake(layer_mutex, pdMS_TO_TICKS(1));
         }
         layer = active_layer;
-        if (layer_mutex) {
+        if (layer_mutex)
+        {
             xSemaphoreGive(layer_mutex);
         }
 
@@ -176,13 +187,17 @@ void matrix_task(void *params)
         uint16_t bytes_per_row = (COL_NUM + 7) / 8;
 
         // Prefer active layer; fallback to legacy gfx_handle
-        if (layer && layer->fb) {
+        if (layer && layer->fb)
+        {
             row_data = layer->fb + (row * bytes_per_row);
-        } else if (gfx_handle && gfx_handle->fb) {
+        }
+        else if (gfx_handle && gfx_handle->fb)
+        {
             row_data = gfx_handle->fb + (row * bytes_per_row);
         }
 
-        if (row_data) {
+        if (row_data)
+        {
             spi_transaction_t trans = {
                 .tx_buffer = row_data,
                 .length = COL_NUM + 1,

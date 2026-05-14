@@ -9,5 +9,6 @@ idf_component_register(SRCS "main.c"
                              "vlt.c" 
                              "datetime.c"
                              "weather/weather.c" "display/sprite.c"
-                    REQUIRES driver esp_wifi nvs_flash esp_netif esp_http_client json
+                             "airplanes/airplanes.c"
+                    REQUIRES driver esp_wifi nvs_flash esp_netif esp_http_client json mbedtls
                     INCLUDE_DIRS ".")
