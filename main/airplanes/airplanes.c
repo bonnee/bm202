@@ -25,7 +25,8 @@ static const char *TAG = "AIRPLANES";
 #define AIRPLANES_LAT LAT
 #define AIRPLANES_LON LON
 #define AIRPLANES_REFRESH_MS (20 * 1000)
-#define AIRPLANES_CLOSEST_RADIUS_NM 10
+#define AIRPLANES_REFRESH_FAST_MS (5 * 1000)
+#define AIRPLANES_CLOSEST_RADIUS_NM 7
 
 typedef struct
 {
@@ -42,6 +43,7 @@ typedef struct
 } airplane_data_t;
 
 static airplane_data_t s_airplane = {0};
+static gfx_scrolling_text_id_t s_airplane_text_id = GFX_SCROLLING_TEXT_ID_INVALID;
 
 bool airplanes_has_nearby(void)
 {
@@ -188,24 +190,6 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-static esp_err_t get_header_ci(esp_http_client_handle_t client, const char *const *keys, size_t key_count, char **value_out)
-{
-    if (!client || !keys || key_count == 0 || !value_out)
-    {
-        return ESP_FAIL;
-    }
-
-    for (size_t i = 0; i < key_count; i++)
-    {
-        if (esp_http_client_get_header(client, keys[i], value_out) == ESP_OK && *value_out && (*value_out)[0] != '\0')
-        {
-            return ESP_OK;
-        }
-    }
-
-    return ESP_FAIL;
-}
-
 static bool http_get_json(const char *url, char *buf, size_t buf_size)
 {
     esp_http_client_config_t config = {
@@ -291,7 +275,6 @@ static bool http_get_json_logged(const char *url, char *buf, size_t buf_size, in
         };
         esp_http_client_handle_t client;
         int status;
-        int content_len;
         int total_read;
         esp_err_t err;
 
@@ -314,7 +297,6 @@ static bool http_get_json_logged(const char *url, char *buf, size_t buf_size, in
 
         esp_http_client_fetch_headers(client);
         status = esp_http_client_get_status_code(client);
-        content_len = esp_http_client_get_content_length(client);
         if (status_out)
         {
             *status_out = status;
@@ -395,64 +377,6 @@ static bool try_get_string(cJSON *obj, const char *key, char *dst, size_t dst_si
     return false;
 }
 
-static bool find_route_codes_recursive(cJSON *node, char *dep, size_t dep_sz, char *dst, size_t dst_sz)
-{
-    cJSON *child;
-
-    if (!node)
-    {
-        return false;
-    }
-
-    if (cJSON_IsObject(node))
-    {
-        char dep_raw[24] = {0};
-        char dst_raw[24] = {0};
-        bool dep_found = false;
-        bool dst_found = false;
-
-        dep_found = try_get_string(node, "dep", dep_raw, sizeof(dep_raw)) ||
-                    try_get_string(node, "departure", dep_raw, sizeof(dep_raw)) ||
-                    try_get_string(node, "origin", dep_raw, sizeof(dep_raw)) ||
-                    try_get_string(node, "from", dep_raw, sizeof(dep_raw));
-
-        dst_found = try_get_string(node, "dst", dst_raw, sizeof(dst_raw)) ||
-                    try_get_string(node, "arrival", dst_raw, sizeof(dst_raw)) ||
-                    try_get_string(node, "destination", dst_raw, sizeof(dst_raw)) ||
-                    try_get_string(node, "to", dst_raw, sizeof(dst_raw));
-
-        if (dep_found && dst_found)
-        {
-            sanitize_airport_code(dep, dep_sz, dep_raw);
-            sanitize_airport_code(dst, dst_sz, dst_raw);
-            return dep[0] != '\0' && dst[0] != '\0';
-        }
-
-        child = node->child;
-        while (child)
-        {
-            if (find_route_codes_recursive(child, dep, dep_sz, dst, dst_sz))
-            {
-                return true;
-            }
-            child = child->next;
-        }
-    }
-    else if (cJSON_IsArray(node))
-    {
-        cJSON *item = NULL;
-        cJSON_ArrayForEach(item, node)
-        {
-            if (find_route_codes_recursive(item, dep, dep_sz, dst, dst_sz))
-            {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
 static bool parse_route_response(const char *json, airplane_data_t *airplane)
 {
     cJSON *root;
@@ -475,15 +399,15 @@ static bool parse_route_response(const char *json, airplane_data_t *airplane)
     airport_codes_iata = cJSON_GetObjectItemCaseSensitive(root, "_airport_codes_iata");
     airports = cJSON_GetObjectItemCaseSensitive(root, "_airports");
 
-    if (cJSON_IsString(airport_codes) && airport_codes->valuestring && airport_codes->valuestring[0] != '\0')
+    if (cJSON_IsString(airport_codes_iata) && airport_codes_iata->valuestring && airport_codes_iata->valuestring[0] != '\0')
     {
-        parse_route_pair(airplane->dep, sizeof(airplane->dep), airplane->dst, sizeof(airplane->dst), airport_codes->valuestring);
+        parse_route_pair(airplane->dep, sizeof(airplane->dep), airplane->dst, sizeof(airplane->dst), airport_codes_iata->valuestring);
         airplane->has_route = airplane->dep[0] != '\0' && airplane->dst[0] != '\0';
     }
 
-    if ((!airplane->has_route || airplane->dep[0] == '\0' || airplane->dst[0] == '\0') && cJSON_IsString(airport_codes_iata) && airport_codes_iata->valuestring && airport_codes_iata->valuestring[0] != '\0')
+    if ((!airplane->has_route || airplane->dep[0] == '\0' || airplane->dst[0] == '\0') && airport_codes && cJSON_IsString(airport_codes) && airport_codes->valuestring && airport_codes->valuestring[0] != '\0')
     {
-        parse_route_pair(airplane->dep, sizeof(airplane->dep), airplane->dst, sizeof(airplane->dst), airport_codes_iata->valuestring);
+        parse_route_pair(airplane->dep, sizeof(airplane->dep), airplane->dst, sizeof(airplane->dst), airport_codes->valuestring);
         airplane->has_route = airplane->dep[0] != '\0' && airplane->dst[0] != '\0';
     }
 
@@ -641,15 +565,15 @@ static void fetch_airplanes(void)
 
     if (!http_get_json(url, response, sizeof(response)))
     {
-        ESP_LOGW(TAG, "Failed to fetch closest aircraft");
         s_airplane.valid = 0;
+        ESP_LOGW(TAG, "Failed to fetch closest aircraft");
         return;
     }
 
     if (!parse_closest_aircraft(response, &tmp))
     {
-        ESP_LOGW(TAG, "No valid aircraft in closest response");
         s_airplane.valid = 0;
+        ESP_LOGW(TAG, "No valid aircraft in closest response");
         return;
     }
 
@@ -698,52 +622,39 @@ static void format_airplane_text(const airplane_data_t *airplane, char *out, siz
              airplane->distance_km);
 }
 
-void airplanes_task(void *params)
+void airplanes_fetch_task(void *params)
 {
-    TickType_t last_fetch;
-    bool was_active = false;
-    char display_text[96];
-    char rendered_text[96] = {0};
-
-    (void)params;
-
-    ESP_LOGI(TAG, "started");
-    last_fetch = xTaskGetTickCount() - pdMS_TO_TICKS(AIRPLANES_REFRESH_MS);
-
     for (;;)
     {
-        TickType_t now = xTaskGetTickCount();
+        fetch_airplanes();
+        vTaskDelay(pdMS_TO_TICKS(s_airplane.valid ? AIRPLANES_REFRESH_FAST_MS : AIRPLANES_REFRESH_MS));
+    }
+}
 
-        if ((now - last_fetch) >= pdMS_TO_TICKS(AIRPLANES_REFRESH_MS))
-        {
-            fetch_airplanes();
-            last_fetch = now;
-        }
+void airplanes_task(void *params)
+{
+    char display_text[96];
 
+    xTaskCreate(airplanes_fetch_task, "airplanes_fetch", 16384, NULL, tskIDLE_PRIORITY + 1, NULL);
+
+    ESP_LOGI(TAG, "started");
+    for (;;)
+    {
         if (carousel_get_item() == CAROUSEL_ITEM_AIRPLANES)
         {
             format_airplane_text(&s_airplane, display_text, sizeof(display_text));
-            if (!was_active || strcmp(display_text, rendered_text) != 0)
-            {
-                gfx_remove_scrolling_text(gfx_handle, LEFT_REGION_X, 0, LEFT_REGION_WIDTH);
-                compositor_clear_left_region();
-                gfx_draw_text(gfx_handle, &font5x7, LEFT_REGION_X, 0, display_text, LEFT_REGION_WIDTH);
-                strncpy(rendered_text, display_text, sizeof(rendered_text) - 1);
-                rendered_text[sizeof(rendered_text) - 1] = '\0';
-            }
-            was_active = true;
+            s_airplane_text_id = gfx_draw_scrolling_text(gfx_handle, &font5x7, LEFT_REGION_X, 0, display_text, LEFT_REGION_WIDTH, s_airplane_text_id);
         }
         else
         {
-            if (was_active)
+            if (s_airplane_text_id != GFX_SCROLLING_TEXT_ID_INVALID)
             {
-                gfx_remove_scrolling_text(gfx_handle, LEFT_REGION_X, 0, LEFT_REGION_WIDTH);
+                gfx_remove_scrolling_text_by_id(gfx_handle, s_airplane_text_id);
+                s_airplane_text_id = GFX_SCROLLING_TEXT_ID_INVALID;
                 compositor_clear_left_region();
             }
-            was_active = false;
-            rendered_text[0] = '\0';
         }
 
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

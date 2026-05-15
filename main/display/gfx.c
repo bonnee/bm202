@@ -9,12 +9,14 @@
 static void _gfx_draw_text_internal(gfx_handle_t *handle, const gfx_font_t *font,
                                     int x, int y, const char *text,
                                     int clip_x, int clip_width);
+static gfx_scrolling_text_t *_gfx_find_scrolling_text_by_id(gfx_handle_t *handle, gfx_scrolling_text_id_t text_id, gfx_scrolling_text_t **prev_out);
 static void _gfx_remove_scrolling_text(gfx_handle_t *handle, int x, int y, int text_width,
                                        const gfx_font_t *font, const char *text);
 
 // Global render queue handle (set during initialization)
 static QueueHandle_t g_render_queue = NULL;
 static uint8_t g_active_layer_id = 0xFF; // 0xFF = broadcast to all layers
+static gfx_scrolling_text_id_t g_next_scrolling_text_id = 1;
 
 /**
  * @brief Set the render queue for gfx to use
@@ -112,26 +114,76 @@ void gfx_draw_pixel(gfx_handle_t *handle, int x, int y, bool state)
 
 void gfx_draw_text(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, const char *text, int text_width)
 {
+    (void)gfx_draw_scrolling_text(handle, font, x, y, text, text_width, GFX_SCROLLING_TEXT_ID_INVALID);
+}
+
+gfx_scrolling_text_id_t gfx_draw_scrolling_text(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, const char *text, int text_width, gfx_scrolling_text_id_t text_id)
+{
     // Calculate the full width of the text if rendered completely
     int full_text_width = strlen(text) * (font->width + font->spacing) - font->spacing;
+    gfx_scrolling_text_t *scroll = NULL;
+
+    if (!handle || !font || !text)
+    {
+        return GFX_SCROLLING_TEXT_ID_INVALID;
+    }
 
     // If text_width is provided and the text is wider than this width, enable scrolling.
     // A text_width of 0 means static drawing.
     if (text_width > 0 && full_text_width > text_width)
     {
-        // Update an existing scrolling entry for the same draw region when possible.
-        // This prevents duplicate scroll instances from accumulating across refreshes.
-        _gfx_remove_scrolling_text(handle, x, y, text_width, font, NULL);
+        // Scrolling case
+        if (text_id != GFX_SCROLLING_TEXT_ID_INVALID)
+        {
+            // Update an existing scrolling text entry
+            scroll = _gfx_find_scrolling_text_by_id(handle, text_id, NULL);
+            if (scroll)
+            {
+                char *new_text = strdup(text);
+                if (!new_text)
+                {
+                    return text_id;
+                }
 
-        gfx_scrolling_text_t *scroll = malloc(sizeof(gfx_scrolling_text_t));
+                free(scroll->text);
+                scroll->text = new_text;
+                scroll->font = font;
+                scroll->x = x;
+                scroll->y = y;
+                scroll->text_width = text_width;
+                scroll->full_text_width = full_text_width;
+                if (scroll->scroll_offset > scroll->full_text_width)
+                {
+                    scroll->scroll_offset = -scroll->text_width;
+                }
+                return scroll->id;
+            }
+        }
+
+        // Create a new scrolling entry
+        // Remove any existing entry at this location if creating new (not updating)
+        if (text_id == GFX_SCROLLING_TEXT_ID_INVALID)
+        {
+            _gfx_remove_scrolling_text(handle, x, y, text_width, font, NULL);
+        }
+
+        scroll = malloc(sizeof(gfx_scrolling_text_t));
         if (!scroll)
-            return;
+        {
+            return GFX_SCROLLING_TEXT_ID_INVALID;
+        }
+
+        scroll->id = (text_id == GFX_SCROLLING_TEXT_ID_INVALID) ? g_next_scrolling_text_id++ : text_id;
+        if (g_next_scrolling_text_id == GFX_SCROLLING_TEXT_ID_INVALID)
+        {
+            g_next_scrolling_text_id = 1;
+        }
 
         scroll->text = strdup(text);
         if (!scroll->text)
         {
             free(scroll);
-            return;
+            return GFX_SCROLLING_TEXT_ID_INVALID;
         }
 
         scroll->font = font;
@@ -141,14 +193,20 @@ void gfx_draw_text(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, c
         scroll->full_text_width = full_text_width;
         // Start off-screen to the right to have it scroll into view
         scroll->scroll_offset = -text_width;
-
-        // Add to the head of the list
         scroll->next = handle->scrolling_texts;
         handle->scrolling_texts = scroll;
+
+        return scroll->id;
     }
     else
     {
-        // Draw text statically - enqueue if queue available
+        // Draw text statically
+        // Remove any existing scroll if provided
+        if (text_id != GFX_SCROLLING_TEXT_ID_INVALID)
+        {
+            (void)gfx_remove_scrolling_text_by_id(handle, text_id);
+        }
+
         if (g_render_queue)
         {
             // Convert font pointer to font_type_t
@@ -177,7 +235,44 @@ void gfx_draw_text(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, c
             // Legacy: draw directly to framebuffer when queue is not configured.
             _gfx_draw_text_internal(handle, font, x, y, text, 0, 0);
         }
+
+        return GFX_SCROLLING_TEXT_ID_INVALID;
     }
+}
+
+bool gfx_remove_scrolling_text_by_id(gfx_handle_t *handle, gfx_scrolling_text_id_t text_id)
+{
+    gfx_scrolling_text_t *prev = NULL;
+    gfx_scrolling_text_t *current;
+
+    if (!handle || text_id == GFX_SCROLLING_TEXT_ID_INVALID)
+    {
+        return false;
+    }
+
+    current = handle->scrolling_texts;
+    while (current)
+    {
+        if (current->id == text_id)
+        {
+            if (prev)
+            {
+                prev->next = current->next;
+            }
+            else
+            {
+                handle->scrolling_texts = current->next;
+            }
+            free(current->text);
+            free(current);
+            return true;
+        }
+
+        prev = current;
+        current = current->next;
+    }
+
+    return false;
 }
 
 void gfx_remove_scrolling_text(gfx_handle_t *handle, int x, int y, int text_width)
@@ -334,4 +429,42 @@ static void _gfx_draw_text_internal(gfx_handle_t *handle, const gfx_font_t *font
         cursor_x += font->width + font->spacing;
         text++;
     }
+}
+
+static gfx_scrolling_text_t *_gfx_find_scrolling_text_by_id(gfx_handle_t *handle, gfx_scrolling_text_id_t text_id, gfx_scrolling_text_t **prev_out)
+{
+    gfx_scrolling_text_t *prev = NULL;
+    gfx_scrolling_text_t *current;
+
+    if (!handle || text_id == GFX_SCROLLING_TEXT_ID_INVALID)
+    {
+        if (prev_out)
+        {
+            *prev_out = NULL;
+        }
+        return NULL;
+    }
+
+    current = handle->scrolling_texts;
+    while (current)
+    {
+        if (current->id == text_id)
+        {
+            if (prev_out)
+            {
+                *prev_out = prev;
+            }
+            return current;
+        }
+
+        prev = current;
+        current = current->next;
+    }
+
+    if (prev_out)
+    {
+        *prev_out = NULL;
+    }
+
+    return NULL;
 }

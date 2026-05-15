@@ -76,5 +76,5 @@ void app_main(void)
     xTaskCreate(datetime_task, "time_sync", 4096, NULL, 2, NULL);
     xTaskCreate(vlt_task, "vlt", 4096, (void *)68, 5, NULL);
     xTaskCreate(weather_task, "weather", 8192, NULL, 3, NULL);
-    xTaskCreate(airplanes_task, "airplanes", 16384, NULL, 3, NULL);
+    xTaskCreate(airplanes_task, "airplanes", 4096, NULL, 3, NULL);
 }

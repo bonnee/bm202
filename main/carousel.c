@@ -60,7 +60,7 @@ void carousel_task(void *params)
 
     for (;;)
     {
-        vTaskDelay(pdMS_TO_TICKS(interval_ms));
+        vTaskDelay(pdMS_TO_TICKS(interval_ms) * (s_current_item == CAROUSEL_ITEM_AIRPLANES ? 2 : 1));
         s_current_item = carousel_next_enabled_item(s_current_item);
         s_generation++;
         compositor_clear_left_region();

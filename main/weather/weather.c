@@ -49,6 +49,8 @@ static weather_data_t s_weather = {
     .valid = 0,
 };
 
+static gfx_scrolling_text_id_t s_weather_text_id = GFX_SCROLLING_TEXT_ID_INVALID;
+
 static bool is_night_now(void)
 {
     time_t now;
@@ -131,20 +133,6 @@ static const uint8_t *get_weather_icon_bitmap(int code, uint32_t time_ms)
     }
 
     return sprite_cloud; // fallback
-}
-
-/**
- * @brief Draw a sprite bitmap at the specified position
- *
- * @param x      X coordinate
- * @param y      Y coordinate
- * @param bitmap Pointer to sprite bitmap data
- */
-static void draw_icon(int x, int y, const uint8_t *bitmap)
-{
-    if (!bitmap)
-        return;
-    sprite_blit_transparent(bitmap, ICON_SIZE, ICON_SIZE, x, y);
 }
 
 static uint16_t weather_group_width(int text_width_px)
@@ -332,7 +320,13 @@ void weather_task(void *params)
                 sprite_blit_opaque(icon_bitmap, ICON_SIZE, ICON_SIZE, icon_x, 0);
             }
 
-            gfx_draw_text(gfx_handle, &font5x7, text_x, 0, temp_text, LEFT_REGION_WIDTH);
+            s_weather_text_id = gfx_draw_scrolling_text(gfx_handle, &font5x7, text_x, 0, temp_text, LEFT_REGION_WIDTH, s_weather_text_id);
+        }
+        else if (s_weather_text_id != GFX_SCROLLING_TEXT_ID_INVALID)
+        {
+            gfx_remove_scrolling_text_by_id(gfx_handle, s_weather_text_id);
+            s_weather_text_id = GFX_SCROLLING_TEXT_ID_INVALID;
+            compositor_clear_left_region();
         }
 
         vTaskDelay(pdMS_TO_TICKS(50));

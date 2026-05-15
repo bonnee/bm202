@@ -10,6 +10,10 @@
 // Forward declaration
 struct gfx_scrolling_text;
 
+typedef uint32_t gfx_scrolling_text_id_t;
+
+#define GFX_SCROLLING_TEXT_ID_INVALID ((gfx_scrolling_text_id_t)0)
+
 typedef struct
 {
     uint16_t width, height;
@@ -33,6 +37,7 @@ typedef struct
 // Struct to hold state for a single scrolling text instance
 typedef struct gfx_scrolling_text
 {
+    gfx_scrolling_text_id_t id;
     char *text;
     const gfx_font_t *font;
     int x;
@@ -61,5 +66,7 @@ void gfx_free(gfx_handle_t *handle);
 void gfx_draw_pixel(gfx_handle_t *handle, int x, int y, bool state);
 void gfx_draw_line(gfx_handle_t *handle, int x0, int y0, int x1, int y1, bool state);
 void gfx_draw_text(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, const char *text, int text_width);
+gfx_scrolling_text_id_t gfx_draw_scrolling_text(gfx_handle_t *handle, const gfx_font_t *font, int x, int y, const char *text, int text_width, gfx_scrolling_text_id_t text_id);
+bool gfx_remove_scrolling_text_by_id(gfx_handle_t *handle, gfx_scrolling_text_id_t text_id);
 void gfx_remove_scrolling_text(gfx_handle_t *handle, int x, int y, int text_width);
 void gfx_update(gfx_handle_t *handle);
